@@ -30,6 +30,7 @@ Einrichtung (einmalig)
 from __future__ import annotations
 
 import datetime as dt
+import html as html_lib
 import os
 
 import pandas as pd
@@ -123,16 +124,93 @@ def condition_text(info: dict | None) -> str:
     return "; ".join(parts)
 
 
+def build_results_html(results: list[dict]) -> str:
+    """Baut die responsive Kartenansicht der Ergebnisse als HTML."""
+    cards = []
+    for r in results:
+        name = html_lib.escape(r["name"])
+        meta = []
+        if isinstance(r["drive"], int):
+            meta.append(f"ca. {r['drive']} Min.")
+        if r["mofr"]:
+            meta.append(f"Mo-Fr CHF {html_lib.escape(str(r['mofr']))}")
+        if r["saso"]:
+            meta.append(f"Sa/So CHF {html_lib.escape(str(r['saso']))}")
+        meta_html = (f'<div class="tt-meta">{" &middot; ".join(meta)}</div>'
+                     if meta else "")
+        cond_html = (f'<div class="tt-cond">{html_lib.escape(r["cond"])}</div>'
+                     if r["cond"] else "")
+
+        chips = []
+        for s in r["slots"]:
+            free = s["free"]
+            free_txt = f"{free} frei" if free else ""
+            inner = (f'<span class="tt-time">{html_lib.escape(s["time"])}</span>'
+                     f'<span class="tt-free">{free_txt}</span>')
+            link = s.get("link")
+            if link:
+                chips.append(
+                    f'<a class="tt-slot" href="{html_lib.escape(link)}" '
+                    f'target="_blank" rel="noopener">{inner}</a>')
+            else:
+                chips.append(f'<span class="tt-slot tt-slot-off">{inner}</span>')
+
+        cards.append(
+            '<div class="tt-course">'
+            f'<div class="tt-name">{name}</div>'
+            f'{meta_html}{cond_html}'
+            f'<div class="tt-slots">{"".join(chips)}</div>'
+            '</div>')
+    return '<div class="tt-wrap">' + "".join(cards) + "</div>"
+
+
 # ---------------------------------------------------------------------------
 # Oberfläche
 # ---------------------------------------------------------------------------
 
-st.set_page_config(page_title="Tee-Time-Finder", page_icon="\u26f3", layout="wide")
+st.set_page_config(page_title="Tee-Time-Finder", page_icon="\u26f3",
+                   layout="centered", initial_sidebar_state="auto")
 st.markdown(
     """
     <style>
-      section[data-testid="stSidebar"] { width: 440px !important; }
-      section[data-testid="stSidebar"] > div { width: 440px !important; }
+      /* Auf grossen Bildschirmen die Eingabeleiste breiter machen. */
+      @media (min-width: 992px) {
+        section[data-testid="stSidebar"],
+        section[data-testid="stSidebar"] > div { width: 420px !important; }
+      }
+      /* Auf dem Handy alles kompakter und passend zur Bildschirmbreite. */
+      @media (max-width: 991px) {
+        h1 { font-size: 1.6rem !important; line-height: 1.2 !important; }
+        .block-container { padding-top: 2.5rem !important;
+                           padding-left: 0.8rem !important;
+                           padding-right: 0.8rem !important; }
+      }
+
+      /* Ergebnis-Karten: passen sich jeder Bildschirmbreite an. */
+      .tt-wrap { display: flex; flex-direction: column; gap: 12px; }
+      .tt-course { border: 1px solid #e4e6e4; border-radius: 14px;
+                   padding: 14px 16px; background: #ffffff;
+                   box-shadow: 0 1px 2px rgba(0,0,0,0.04); }
+      .tt-name { font-weight: 700; font-size: 1.02rem; color: #1b1b1b;
+                 line-height: 1.25; }
+      .tt-meta { color: #5a5f5a; font-size: 0.84rem; margin-top: 3px; }
+      .tt-cond { color: #9a6a00; font-size: 0.8rem; margin-top: 3px; }
+      .tt-slots { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+      .tt-slot { display: inline-flex; flex-direction: column;
+                 align-items: center; justify-content: center;
+                 text-decoration: none; background: #2E6B3E; color: #ffffff;
+                 border-radius: 11px; padding: 8px 12px; min-width: 62px;
+                 transition: background 0.15s; }
+      .tt-slot:hover { background: #24572f; }
+      .tt-slot-off { background: #9aa19a; }
+      .tt-time { font-weight: 700; font-size: 0.96rem; line-height: 1.15;
+                 color: #ffffff; }
+      .tt-free { font-size: 0.68rem; opacity: 0.92; color: #ffffff; }
+      /* Auf grossen Schirmen etwas grosszügigere Knöpfe. */
+      @media (min-width: 992px) {
+        .tt-slot { min-width: 72px; padding: 9px 14px; }
+        .tt-time { font-size: 1.0rem; }
+      }
     </style>
     """,
     unsafe_allow_html=True,
@@ -276,7 +354,7 @@ if go:
                    "oder die Fahrzeit erhöhen.")
         st.stop()
 
-    rows: list[dict] = []
+    results: list[dict] = []
     checked: list[dict] = []
 
     progress = st.progress(0.0, text="Suche läuft ...")
@@ -300,46 +378,29 @@ if go:
                             "Status": f"keine freie Zeit ({drive_txt} Min.)"})
             continue
 
-        for s in hits:
-            rows.append({
-                "Platz": course["name"],
-                "Zeit": s["time"],
-                "Frei": s["free"],
-                "Fahrzeit (Min.)": mins if mins is not None else "?",
-                "Greenfee Mo-Fr": info.get("mofr18", "") or "",
-                "Greenfee Sa/So": info.get("saso18", "") or "",
-                "Bedingung": condition_text(info),
-                "Buchen": s["link"],
-            })
+        hits_sorted = sorted(hits, key=lambda s: s["time"])
+        results.append({
+            "name": course["name"],
+            "drive": mins,
+            "mofr": info.get("mofr18", "") or "",
+            "saso": info.get("saso18", "") or "",
+            "cond": condition_text(info),
+            "slots": hits_sorted,
+        })
     progress.empty()
+
+    # Nach Fahrzeit gruppiert sortieren (Plätze ohne Schätzung ans Ende).
+    results.sort(key=lambda r: (r["drive"] if isinstance(r["drive"], int)
+                                else 9999, r["name"]))
 
     st.subheader(f"Buchbare Startzeiten am {date_de(date)}")
 
-    if rows:
-        df = pd.DataFrame(rows)
-        # Standard-Sortierung: nach Platz gruppiert (alle Startzeiten eines
-        # Platzes zusammen), Plätze nach Fahrzeit, dann nach Zeit. In der
-        # Tabelle lässt sich jede Spalte per Klick auf den Titel umsortieren.
-        df["_drive"] = df["Fahrzeit (Min.)"].apply(
-            lambda x: x if isinstance(x, int) else 9999)
-        df = (df.sort_values(["_drive", "Platz", "Zeit"])
-                .drop(columns="_drive"))
-        st.dataframe(
-            df, use_container_width=True, hide_index=True,
-            column_config={
-                "Buchen": st.column_config.LinkColumn("Buchen", display_text="Jetzt buchen"),
-                "Greenfee Mo-Fr": st.column_config.TextColumn(
-                    "Greenfee Mo-Fr", help="18-Loch-Greenfee Mo-Fr für "
-                    "Migros-GolfCard-Mitglieder (CHF)."),
-                "Greenfee Sa/So": st.column_config.TextColumn(
-                    "Greenfee Sa/So", help="18-Loch-Greenfee am Wochenende "
-                    "für Migros-GolfCard-Mitglieder (CHF)."),
-            },
-        )
-        st.success(f"{len(rows)} buchbare Startzeit(en) gefunden.")
-        st.caption("Tipp: Auf einen Spaltentitel klicken sortiert die Tabelle "
-                   "nach dieser Spalte. Greenfee-Angaben aus der "
-                   "Migros-Tarifliste, ohne Gewähr.")
+    if results:
+        total = sum(len(r["slots"]) for r in results)
+        st.markdown(build_results_html(results), unsafe_allow_html=True)
+        st.success(f"{total} buchbare Startzeit(en) gefunden.")
+        st.caption("Tippe auf eine Zeit, um direkt zur Buchung zu gelangen. "
+                   "Greenfee-Angaben aus der Migros-Tarifliste, ohne Gewähr.")
     else:
         st.info("Keine buchbaren Startzeiten im gewählten Rahmen gefunden.")
 
