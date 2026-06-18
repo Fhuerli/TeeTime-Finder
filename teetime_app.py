@@ -301,9 +301,14 @@ options = [c["name"] for c in known]
 if include_far:
     options += [c["name"] for c in unknown]
 
-# Auswahl bleibt erhalten: beim ersten Mal alles auswählen, danach nur noch
-# auf gültige Optionen beschränken (neue nicht automatisch dazu).
-if "sel_places" not in st.session_state:
+# Die Auswahl folgt dem Fahrzeit-Schieber: ändert sich der Schieber oder das
+# Häkchen, werden alle Plätze im neuen Umkreis ausgewählt. Solange der Schieber
+# gleich bleibt, bleibt ein manuelles Abwählen einzelner Plätze erhalten.
+drive_sig = (max_drive, include_far)
+if st.session_state.get("_drive_sig") != drive_sig:
+    st.session_state["sel_places"] = list(options)
+    st.session_state["_drive_sig"] = drive_sig
+elif "sel_places" not in st.session_state:
     st.session_state["sel_places"] = list(options)
 else:
     st.session_state["sel_places"] = [
