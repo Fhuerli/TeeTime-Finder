@@ -173,6 +173,13 @@ st.set_page_config(page_title="Tee-Time-Finder", page_icon="\u26f3",
 st.markdown(
     """
     <style>
+      /* Streamlit-Bedienelemente ausblenden für einen aufgeräumten Auftritt. */
+      #MainMenu { visibility: hidden; }
+      footer { visibility: hidden; }
+      [data-testid="stToolbar"] { display: none; }
+      [data-testid="stDecoration"] { display: none; }
+      [data-testid="stStatusWidget"] { display: none; }
+
       /* Auf dem Handy alles kompakter und passend zur Bildschirmbreite. */
       @media (max-width: 991px) {
         h1 { font-size: 1.6rem !important; line-height: 1.2 !important; }
