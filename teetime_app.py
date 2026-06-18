@@ -173,11 +173,6 @@ st.set_page_config(page_title="Tee-Time-Finder", page_icon="\u26f3",
 st.markdown(
     """
     <style>
-      /* Auf grossen Bildschirmen die Eingabeleiste breiter machen. */
-      @media (min-width: 992px) {
-        section[data-testid="stSidebar"],
-        section[data-testid="stSidebar"] > div { width: 420px !important; }
-      }
       /* Auf dem Handy alles kompakter und passend zur Bildschirmbreite. */
       @media (max-width: 991px) {
         h1 { font-size: 1.6rem !important; line-height: 1.2 !important; }
@@ -223,124 +218,99 @@ all_courses = load_courses()
 migros_data = load_migros()
 migros_clubs = (migros_data or {}).get("clubs", {})
 
-with st.sidebar:
-    st.header("Eingaben")
+# Annahme: alle nutzen die Migros GolfCard. Plätze, auf denen damit nicht
+# gespielt werden kann (nicht in der Migros-Liste, oder am Wochenende nur mit
+# Mitglied), werden nicht angezeigt.
+if migros_data:
+    st.caption(f"Migros-Liste Stand {migros_data.get('stand','?')}  ·  "
+               f"{len(migros_clubs)} Plätze")
+else:
+    st.warning("Keine Migros-Liste geladen. Bitte zuunterst die offizielle "
+               "PDF hochladen.")
 
-    # Annahme: alle nutzen die Migros GolfCard. Plätze, auf denen damit nicht
-    # gespielt werden kann (nicht in der Migros-Liste, oder am Wochenende nur
-    # mit Mitglied), werden nicht angezeigt.
-    if migros_data:
-        st.caption(f"Migros-Liste Stand {migros_data.get('stand','?')}  ·  "
-                   f"{len(migros_clubs)} Plätze")
-    else:
-        st.warning("Keine Migros-Liste geladen. Bitte unten die offizielle "
-                   "PDF hochladen.")
+date = st.date_input("Datum", value=dt.date.today(),
+                     min_value=dt.date.today(), format="DD.MM.YYYY")
+is_weekend = date.weekday() >= 5
 
-    date = st.date_input("Datum", value=dt.date.today(),
-                         min_value=dt.date.today(), format="DD.MM.YYYY")
-    is_weekend = date.weekday() >= 5
+c1, c2 = st.columns(2)
+# Von/Bis koppeln: ändert sich "Von", wird "Bis" automatisch auf 30 Minuten
+# später gesetzt. "Bis" lässt sich danach von Hand weiter anpassen.
+if "t_from" not in st.session_state:
+    st.session_state["t_from"] = dt.time(8, 0)
+    st.session_state["t_to"] = dt.time(8, 30)
+    st.session_state["_prev_from"] = dt.time(8, 0)
+if st.session_state.get("_prev_from") != st.session_state["t_from"]:
+    base = dt.datetime.combine(dt.date.today(), st.session_state["t_from"])
+    st.session_state["t_to"] = (base + dt.timedelta(minutes=30)).time()
+    st.session_state["_prev_from"] = st.session_state["t_from"]
+t_from = c1.time_input("Von", key="t_from")
+t_to = c2.time_input("Bis", key="t_to")
 
-    c1, c2 = st.columns(2)
-    # Von/Bis koppeln: ändert sich "Von", wird "Bis" automatisch auf 30 Minuten
-    # später gesetzt. "Bis" lässt sich danach von Hand weiter anpassen.
-    if "t_from" not in st.session_state:
-        st.session_state["t_from"] = dt.time(8, 0)
-        st.session_state["t_to"] = dt.time(8, 30)
-        st.session_state["_prev_from"] = dt.time(8, 0)
-    if st.session_state.get("_prev_from") != st.session_state["t_from"]:
-        base = dt.datetime.combine(dt.date.today(), st.session_state["t_from"])
-        st.session_state["t_to"] = (base + dt.timedelta(minutes=30)).time()
-        st.session_state["_prev_from"] = st.session_state["t_from"]
-    t_from = c1.time_input("Von", key="t_from")
-    t_to = c2.time_input("Bis", key="t_to")
+flight = st.number_input("Spieler im Flight", min_value=1, max_value=4,
+                         value=4, step=1)
 
-    flight = st.number_input("Spieler im Flight", min_value=1, max_value=4,
-                             value=4, step=1)
+only_available = st.checkbox(
+    "Nur verfügbare Zeiten anzeigen", value=True,
+    help="Blendet alle nicht buchbaren Zeiten aus (reserviert, belegt, "
+         "gesperrt).",
+)
 
-    only_available = st.checkbox(
-        "Nur verfügbare Zeiten anzeigen", value=True,
-        help="Blendet alle nicht buchbaren Zeiten aus (reserviert, belegt, "
-             "gesperrt).",
-    )
+# Alle Plätze mit Migros-Info anreichern und auf Migros-spielbare filtern.
+enriched = []
+for c in all_courses:
+    info = migros.find_migros_course(c["name"], migros_clubs) \
+        if migros_clubs else None
+    enriched.append({**c, "migros": info})
 
-    # Alle Plätze mit Migros-Info anreichern und auf Migros-spielbare filtern.
-    enriched = []
-    for c in all_courses:
-        info = migros.find_migros_course(c["name"], migros_clubs) \
-            if migros_clubs else None
-        enriched.append({**c, "migros": info})
 
-    def playable_migros(course: dict) -> bool:
-        info = course["migros"]
-        if info is None:
-            return False  # nicht in Migros-Liste -> hier nicht spielbar
-        if is_weekend and info.get("weekend_member_only"):
-            return False  # Wochenende nur mit Mitglied -> als Gast nicht spielbar
-        return True
+def playable_migros(course: dict) -> bool:
+    info = course["migros"]
+    if info is None:
+        return False  # nicht in Migros-Liste -> hier nicht spielbar
+    if is_weekend and info.get("weekend_member_only"):
+        return False  # Wochenende nur mit Mitglied -> als Gast nicht spielbar
+    return True
 
-    # Ohne geladene Migros-Liste kein Filter (sonst wäre alles leer).
-    if migros_clubs:
-        playable = [c for c in enriched if playable_migros(c)]
-    else:
-        playable = enriched
 
-    max_drive = st.slider("Max. Fahrzeit (Min.)", min_value=15,
-                          max_value=180, value=75, step=5)
-    include_far = st.checkbox(
-        "Auch Plätze ohne Fahrzeit-Schätzung zeigen", value=True,
-        help="Zeigt zusätzlich Plätze, für die keine Fahrzeit hinterlegt "
-             "ist (erscheinen am Ende der Liste).",
-    )
+# Ohne geladene Migros-Liste kein Filter (sonst wäre alles leer).
+if migros_clubs:
+    playable = [c for c in enriched if playable_migros(c)]
+else:
+    playable = enriched
 
-    known = [c for c in playable
-             if c["drive"] is not None and c["drive"] <= max_drive]
-    unknown = [c for c in playable if c["drive"] is None]
+max_drive = st.slider("Max. Fahrzeit (Min.)", min_value=15,
+                      max_value=180, value=75, step=5)
+include_far = st.checkbox(
+    "Auch Plätze ohne Fahrzeit-Schätzung zeigen", value=True,
+    help="Zeigt zusätzlich Plätze, für die keine Fahrzeit hinterlegt "
+         "ist (erscheinen am Ende der Liste).",
+)
 
-    options = [c["name"] for c in known]
-    if include_far:
-        options += [c["name"] for c in unknown]
+known = [c for c in playable
+         if c["drive"] is not None and c["drive"] <= max_drive]
+unknown = [c for c in playable if c["drive"] is None]
 
-    # Auswahl bleibt erhalten: beim ersten Mal alles auswählen, danach nur
-    # noch auf gültige Optionen beschränken (neue nicht automatisch dazu).
-    if "sel_places" not in st.session_state:
-        st.session_state["sel_places"] = list(options)
-    else:
-        st.session_state["sel_places"] = [
-            n for n in st.session_state["sel_places"] if n in options]
+options = [c["name"] for c in known]
+if include_far:
+    options += [c["name"] for c in unknown]
 
-    cap = f"{len(options)} Plätze zur Auswahl"
-    if include_far and unknown:
-        cap += f" (davon {len(unknown)} ohne Fahrzeit-Schätzung)"
-    st.caption(cap)
+# Auswahl bleibt erhalten: beim ersten Mal alles auswählen, danach nur noch
+# auf gültige Optionen beschränken (neue nicht automatisch dazu).
+if "sel_places" not in st.session_state:
+    st.session_state["sel_places"] = list(options)
+else:
+    st.session_state["sel_places"] = [
+        n for n in st.session_state["sel_places"] if n in options]
 
-    chosen = st.multiselect("Plätze", options=options, key="sel_places")
-    pool = playable
+cap = f"{len(options)} Plätze zur Auswahl"
+if include_far and unknown:
+    cap += f" (davon {len(unknown)} ohne Fahrzeit-Schätzung)"
+st.caption(cap)
 
-    st.divider()
-    go = st.button("Suchen", type="primary", use_container_width=True)
+chosen = st.multiselect("Plätze", options=options, key="sel_places")
+pool = playable
 
-    # --- Ganz unten: Migros-Liste aktualisieren (nur 1x pro Jahr nötig) ---
-    st.divider()
-    with st.expander("Migros-Liste aktualisieren (1x pro Jahr)"):
-        st.caption("Lade hier die offizielle PDF 'Greenfee-Tarife für Migros "
-                   "GolfCard' hoch (z.B. fürs nächste Jahr). Die App "
-                   "übernimmt sie automatisch.")
-        up = st.file_uploader("Migros-Tarifliste (PDF)", type="pdf")
-        if up is not None:
-            sig = f"{up.name}:{up.size}"
-            if st.session_state.get("migros_upload_sig") != sig:
-                try:
-                    new_data = migros.parse_migros_pdf(up)
-                    if new_data["clubs"]:
-                        migros.save_json(new_data, MIGROS_JSON)
-                        st.session_state["migros_upload_sig"] = sig
-                        st.success(f"Aktualisiert: {len(new_data['clubs'])} "
-                                   f"Plätze (Stand {new_data['stand']}).")
-                        st.rerun()
-                    else:
-                        st.error("In der PDF wurden keine Plätze erkannt.")
-                except Exception as exc:  # noqa: BLE001
-                    st.error(f"PDF konnte nicht gelesen werden: {exc}")
+go = st.button("Suchen", type="primary", use_container_width=True)
 
 
 if go:
@@ -410,5 +380,26 @@ if go:
                          hide_index=True)
         else:
             st.write("Alle gewählten Plätze hatten Treffer.")
-else:
-    st.info("Eingaben links festlegen und auf **Suchen** klicken.")
+
+# --- Ganz unten: Migros-Liste aktualisieren (nur 1x pro Jahr nötig) ---
+st.divider()
+with st.expander("Migros-Liste aktualisieren (1x pro Jahr)"):
+    st.caption("Lade hier die offizielle PDF 'Greenfee-Tarife für Migros "
+               "GolfCard' hoch (z.B. fürs nächste Jahr). Die App übernimmt "
+               "sie automatisch.")
+    up = st.file_uploader("Migros-Tarifliste (PDF)", type="pdf")
+    if up is not None:
+        sig = f"{up.name}:{up.size}"
+        if st.session_state.get("migros_upload_sig") != sig:
+            try:
+                new_data = migros.parse_migros_pdf(up)
+                if new_data["clubs"]:
+                    migros.save_json(new_data, MIGROS_JSON)
+                    st.session_state["migros_upload_sig"] = sig
+                    st.success(f"Aktualisiert: {len(new_data['clubs'])} "
+                               f"Plätze (Stand {new_data['stand']}).")
+                    st.rerun()
+                else:
+                    st.error("In der PDF wurden keine Plätze erkannt.")
+            except Exception as exc:  # noqa: BLE001
+                st.error(f"PDF konnte nicht gelesen werden: {exc}")
