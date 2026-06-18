@@ -318,9 +318,11 @@ chosen = st.multiselect("Plätze", options=options, key="sel_places")
 pool = playable
 
 go = st.button("Suchen", type="primary", use_container_width=True)
-
-
 if go:
+    st.session_state["searched"] = True
+
+
+if st.session_state.get("searched"):
     if t_from > t_to:
         st.error("Das Zeitfenster ist ungültig (Von ist später als Bis).")
         st.stop()
