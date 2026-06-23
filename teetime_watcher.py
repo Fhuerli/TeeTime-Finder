@@ -434,6 +434,11 @@ def parse_slots(course: Course, date: dt.date, raw: str) -> list[Slot]:
                 if a:
                     href = a["href"]
                     booking_link = href if href.startswith("http") else PCCO_BASE + href
+        # Fallback: kein platzgenauer Link -> auf die Startzeiten-Uebersicht des
+        # Tages zeigen, damit der Klick immer auf einer gueltigen Buchungsseite
+        # landet statt auf einer Fehlermeldung.
+        if not booking_link:
+            booking_link = build_url(course, date) or ""
 
         slots.append(Slot(course.name, date, t, free, booking_link,
                           member_reserved, guest_min_hcp))

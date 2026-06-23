@@ -83,7 +83,7 @@ def load_migros() -> dict | None:
     return None
 
 
-@st.cache_data(show_spinner=False, ttl=300)
+@st.cache_data(show_spinner=False, ttl=90)
 def fetch_slots(club_id: int, name: str, date: dt.date):
     course = tw.Course(name=name, lat=0.0, lon=0.0, pccaddie_club_id=club_id)
     raw = tw.fetch_timetable_raw(course, date)
