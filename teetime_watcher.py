@@ -321,6 +321,34 @@ def within_drive_time(course: Course) -> bool:
 # PC-Caddie-Abfrage  (CLUBSPEZIFISCH - hier kommt deine Arbeit rein)
 # ---------------------------------------------------------------------------
 
+def _strip_session_params(url: str) -> str:
+    """Entfernt fremde Sitzungs-IDs aus einem PC-Caddie-Link.
+
+    Beim Auslesen hängt PC Caddie die Server-Sitzung (z.B. __Host-PHPSESSID)
+    an jeden Buchungslink. Diese gehört nicht zum Browser des Nutzers und führt
+    beim Klick zur Fehlermeldung. Wir behalten nur die inhaltlichen Parameter
+    (club, cat, way, als_id, date, time, ...) und werfen die Sitzung weg.
+    """
+    from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
+
+    try:
+        parts = urlsplit(url)
+    except Exception:  # noqa: BLE001
+        return url
+    if not parts.query:
+        return url
+
+    def is_session(key: str) -> bool:
+        k = key.lower()
+        return ("sessid" in k or "session" in k or k == "sid"
+                or key.startswith("__Host-") or key.startswith("__Secure-"))
+
+    kept = [(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True)
+            if not is_session(k)]
+    return urlunsplit((parts.scheme, parts.netloc, parts.path,
+                       urlencode(kept), parts.fragment))
+
+
 def build_url(course: Course, date: dt.date) -> Optional[str]:
     """Baut die Timetable-URL aus Club-ID oder expliziter URL."""
     if course.pccaddie_club_id is not None:
@@ -434,6 +462,7 @@ def parse_slots(course: Course, date: dt.date, raw: str) -> list[Slot]:
                 if a:
                     href = a["href"]
                     booking_link = href if href.startswith("http") else PCCO_BASE + href
+                    booking_link = _strip_session_params(booking_link)
         # Fallback: kein platzgenauer Link -> auf die Startzeiten-Uebersicht des
         # Tages zeigen, damit der Klick immer auf einer gueltigen Buchungsseite
         # landet statt auf einer Fehlermeldung.
