@@ -29,6 +29,7 @@ Einrichtung (einmalig)
 
 from __future__ import annotations
 
+import concurrent.futures as cf
 import datetime as dt
 import html as html_lib
 import os
@@ -349,17 +350,40 @@ if st.session_state.get("searched"):
     results: list[dict] = []
     checked: list[dict] = []
 
-    progress = st.progress(0.0, text="Suche läuft ...")
-    for i, course in enumerate(selected, start=1):
-        progress.progress(i / len(selected), text=f"Prüfe {course['name']} ...")
-
+    # Plaetze innerhalb der Fahrzeit bestimmen; zu weite gleich vermerken.
+    to_fetch = []
+    for course in selected:
         mins = course["drive"]
         if mins is not None and mins > max_drive:
             checked.append({"Platz": course["name"],
                             "Status": f"zu weit (ca. {mins} Min.)"})
-            continue
+        else:
+            to_fetch.append(course)
 
-        slots = fetch_slots(course["club_id"], course["name"], date)
+    # Startzeiten parallel abrufen (mehrere Plaetze gleichzeitig) statt
+    # nacheinander. Das verkuerzt die Wartezeit deutlich.
+    slots_by_name: dict[str, list] = {}
+    if to_fetch:
+        progress = st.progress(0.0, text="Suche läuft ...")
+        done = 0
+        with cf.ThreadPoolExecutor(max_workers=8) as ex:
+            futures = {ex.submit(fetch_slots, c["club_id"], c["name"], date): c
+                       for c in to_fetch}
+            for fut in cf.as_completed(futures):
+                c = futures[fut]
+                try:
+                    slots_by_name[c["name"]] = fut.result()
+                except Exception:  # noqa: BLE001
+                    slots_by_name[c["name"]] = []
+                done += 1
+                progress.progress(done / len(to_fetch),
+                                  text=f"{done}/{len(to_fetch)} Plätze geprüft ...")
+        progress.empty()
+
+    # Treffer auswerten (schnell, ohne Netzwerk).
+    for course in to_fetch:
+        mins = course["drive"]
+        slots = slots_by_name.get(course["name"], [])
         hits = [s for s in slots
                 if slot_possible(s, t_from, t_to, flight, only_available)]
 
@@ -393,7 +417,6 @@ if st.session_state.get("searched"):
             "cond": condition_text(info),
             "slots": hits_sorted,
         })
-    progress.empty()
 
     # Nach Fahrzeit gruppiert sortieren (Plätze ohne Schätzung ans Ende).
     results.sort(key=lambda r: (r["drive"] if isinstance(r["drive"], int)

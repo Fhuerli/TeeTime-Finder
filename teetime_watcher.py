@@ -418,7 +418,7 @@ def fetch_timetable_raw(course: Course, date: dt.date) -> Optional[str]:
         return None
     headers = {**DEFAULT_HEADERS, **(course.headers or {})}
     try:
-        resp = requests.get(url, headers=headers, timeout=20)
+        resp = requests.get(url, headers=headers, timeout=10)
         resp.raise_for_status()
         return resp.text
     except Exception as exc:  # noqa: BLE001
