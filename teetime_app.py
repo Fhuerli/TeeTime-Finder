@@ -96,6 +96,7 @@ def fetch_slots(club_id: int, name: str, date: dt.date):
             "member_reserved": s.member_reserved,
             "guest_min_hcp": s.guest_min_hcp,
             "link": s.booking_link,
+            "holes": s.holes,
         }
         for s in tw.parse_slots(course, date, raw)
     ]
@@ -132,6 +133,9 @@ def build_results_html(results: list[dict]) -> str:
         meta = []
         if isinstance(r["drive"], int):
             meta.append(f"ca. {r['drive']} Min.")
+        holes = str(r.get("holes", "")).strip()
+        if holes.isdigit():
+            meta.append(f"{holes} Loch")
         if r["mofr"]:
             meta.append(f"Mo-Fr CHF {html_lib.escape(str(r['mofr']))}")
         if r["saso"]:
@@ -142,11 +146,15 @@ def build_results_html(results: list[dict]) -> str:
                      if r["cond"] else "")
 
         chips = []
+        mixed = r.get("mixed_holes")
         for s in r["slots"]:
             free = s["free"]
             free_txt = f"{free} frei" if free else ""
+            extra = ""
+            if mixed and s.get("holes"):
+                extra = f'<span class="tt-free">{s["holes"]} Loch</span>'
             inner = (f'<span class="tt-time">{html_lib.escape(s["time"])}</span>'
-                     f'<span class="tt-free">{free_txt}</span>')
+                     f'<span class="tt-free">{free_txt}</span>{extra}')
             link = s.get("link")
             if link:
                 chips.append(
@@ -363,9 +371,23 @@ if st.session_state.get("searched"):
             continue
 
         hits_sorted = sorted(hits, key=lambda s: s["time"])
+        # Lochzahl: bevorzugt die aus PC Caddie gelesene Angabe pro Startzeit.
+        # Einheitlich -> in der Kopfzeile; gemischt -> pro Zeit; sonst Anlage.
+        slot_h = {s.get("holes") for s in hits_sorted if s.get("holes")}
+        if len(slot_h) == 1:
+            holes_val = str(next(iter(slot_h)))
+            mixed_holes = False
+        elif len(slot_h) > 1:
+            holes_val = ""
+            mixed_holes = True
+        else:
+            holes_val = info.get("holes", "") or ""
+            mixed_holes = False
         results.append({
             "name": course["name"],
             "drive": mins,
+            "holes": holes_val,
+            "mixed_holes": mixed_holes,
             "mofr": info.get("mofr18", "") or "",
             "saso": info.get("saso18", "") or "",
             "cond": condition_text(info),
