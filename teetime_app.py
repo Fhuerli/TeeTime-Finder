@@ -68,7 +68,8 @@ def load_courses() -> list[dict]:
         if areas:
             # Anlage mit mehreren Bereichen -> je Bereich ein eigener Eintrag.
             for a in areas:
-                out.append({"name": a["label"], "club_id": c.pccaddie_club_id,
+                label = a.get("label") or f"{c.name}, {a.get('suffix', '')}".strip(", ")
+                out.append({"name": label, "club_id": c.pccaddie_club_id,
                             "drive": c.drive_min_est,
                             "alias": a.get("alias", ""),
                             "als_id": a.get("als_id", ""),

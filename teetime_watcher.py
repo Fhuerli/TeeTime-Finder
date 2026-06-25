@@ -397,6 +397,13 @@ CLUB_AREAS: dict[int, list[dict]] = {
         {"label": "Sempachersee, 18-Loch Lakeside", "als_id": "3282", "holes": 18},
         {"label": "Sempachersee, 18-Loch Woodside", "als_id": "3281", "holes": 18},
     ],
+    205: [  # Anlagenname kommt aus der Erkennung; nur Suffix anhaengen
+        {"suffix": "18-Loch", "alias": "18L", "holes": 18},
+        {"suffix": "9-Loch", "alias": "0901", "holes": 9},
+    ],
+    208: [  # Golfpark Otelfingen
+        {"suffix": "18-Loch", "alias": "018L", "holes": 18},
+    ],
 }
 
 
