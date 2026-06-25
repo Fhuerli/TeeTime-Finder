@@ -389,10 +389,12 @@ def build_url(course: Course, date: dt.date) -> Optional[str]:
     return url
 
 
-# Anlagen, deren Zeiten nur ueber eine abweichende Timetable-Kategorie kommen.
-# (Derzeit keine; Sempachersee laeuft ueber die normale Liste und erscheint als
-# kombinierter 36-Loch-Platz mit Zeiten.)
-CLUB_CAT: dict[int, str] = {}
+# Anlagen, deren Zeiten nur ueber die Spalten-Uebersicht kommen statt ueber die
+# normale Startzeitenliste (z.B. Sempachersee, dessen tt_timetable_course-Seite
+# nicht existiert). parse_slots liest beide Seitenarten.
+CLUB_CAT: dict[int, str] = {
+    171: "tt_timetable_course_alias",  # Golf Sempachersee
+}
 
 # Anlagen, deren Zeiten sich nicht maschinell auslesen lassen -> Direktlink.
 # (Derzeit keine.)
@@ -492,10 +494,18 @@ def parse_slots(course: Course, date: dt.date, raw: str) -> list[Slot]:
     soup = BeautifulSoup(raw, "html.parser")
     slots: list[Slot] = []
 
-    for row in soup.select("tr.pcco-tt-time-person"):
+    # Normale Startzeitenliste: Zeilen mit der bekannten Klasse. Manche Anlagen
+    # (z.B. Sempachersee, Spalten-Uebersicht) verwenden dieselben data-Attribute
+    # an anderen Elementen -> Fallback auf alles, was eine Startzeit traegt.
+    rows = soup.select("tr.pcco-tt-time-person")
+    if not rows:
+        rows = [el for el in soup.select("[data-time]")
+                if el.get("data-seat_bookable") is not None]
+
+    for row in rows:
         time_str = row.get("data-time")
         status = row.get("data-status")
-        if not time_str or status != "bookable":
+        if not time_str or (status and status != "bookable"):
             continue  # occupied / block-time / Kopfzeilen ueberspringen
 
         try:
