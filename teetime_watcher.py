@@ -389,11 +389,14 @@ def build_url(course: Course, date: dt.date) -> Optional[str]:
     return url
 
 
-# Anlagen, deren Zeiten nur ueber die Spalten-Uebersicht kommen (mehrere
-# Plaetze auf einer Seite) statt ueber die normale Startzeitenliste.
-CLUB_CAT: dict[int, str] = {
-    171: "tt_timetable_course_alias",  # Golf Sempachersee
-}
+# Anlagen, deren Zeiten nur ueber eine abweichende Timetable-Kategorie kommen.
+# (Derzeit keine; Sempachersee laeuft ueber die normale Liste und erscheint als
+# kombinierter 36-Loch-Platz mit Zeiten.)
+CLUB_CAT: dict[int, str] = {}
+
+# Anlagen, deren Zeiten sich nicht maschinell auslesen lassen -> Direktlink.
+# (Derzeit keine.)
+CLUB_LINK_ONLY: set = set()
 
 
 # Anlagen (Bereiche) innerhalb eines Clubs, die PC Caddie ueber das Feld

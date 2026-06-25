@@ -168,13 +168,18 @@ def build_results_html(results: list[dict]) -> str:
         chips = []
         mixed = r.get("mixed_holes")
         for s in r["slots"]:
-            free = s["free"]
-            free_txt = f"{free} frei" if free else ""
-            extra = ""
-            if mixed and s.get("holes"):
-                extra = f'<span class="tt-free">{s["holes"]} Loch</span>'
-            inner = (f'<span class="tt-time">{html_lib.escape(s["time"])}</span>'
-                     f'<span class="tt-free">{free_txt}</span>{extra}')
+            label = s.get("label")
+            if label:
+                # Direktlink-Karte: ein breiter Knopf mit Text statt Zeit.
+                inner = f'<span class="tt-time">{html_lib.escape(label)}</span>'
+            else:
+                free = s["free"]
+                free_txt = f"{free} frei" if free else ""
+                extra = ""
+                if mixed and s.get("holes"):
+                    extra = f'<span class="tt-free">{s["holes"]} Loch</span>'
+                inner = (f'<span class="tt-time">{html_lib.escape(s["time"])}</span>'
+                         f'<span class="tt-free">{free_txt}</span>{extra}')
             link = s.get("link")
             if link:
                 chips.append(
@@ -377,11 +382,14 @@ if st.session_state.get("searched"):
 
     # Plaetze innerhalb der Fahrzeit bestimmen; zu weite gleich vermerken.
     to_fetch = []
+    link_only = []
     for course in selected:
         mins = course["drive"]
         if mins is not None and mins > max_drive:
             checked.append({"Platz": course["name"],
                             "Status": f"zu weit (ca. {mins} Min.)"})
+        elif course["club_id"] in tw.CLUB_LINK_ONLY:
+            link_only.append(course)
         else:
             to_fetch.append(course)
 
@@ -458,6 +466,27 @@ if st.session_state.get("searched"):
             "saso": info.get("saso18", "") or "",
             "cond": condition_text(info),
             "slots": hits_sorted,
+        })
+
+    # Direktlink-Plaetze (Zeiten nicht maschinell lesbar): eine Karte mit einem
+    # Knopf auf die PC-Caddie-Uebersicht des gewaehlten Tages.
+    for course in link_only:
+        mins = course["drive"]
+        info = course.get("migros") or {}
+        link = tw.build_url(tw.Course(
+            name=course["name"], lat=0.0, lon=0.0,
+            pccaddie_club_id=course["club_id"],
+            cat=course.get("cat", "tt_timetable_course")), date) or ""
+        results.append({
+            "name": course["name"],
+            "drive": mins,
+            "holes": info.get("holes", "") or "",
+            "mixed_holes": False,
+            "mofr": info.get("mofr18", "") or "",
+            "saso": info.get("saso18", "") or "",
+            "cond": condition_text(info),
+            "slots": [{"time": "", "free": 0, "link": link,
+                       "label": "Startzeiten bei PC Caddie öffnen"}],
         })
 
     # Nach Fahrzeit gruppiert sortieren (Plätze ohne Schätzung ans Ende).
