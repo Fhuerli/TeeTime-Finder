@@ -79,7 +79,7 @@ GOOGLE_MAPS_API_KEY = ""        # optional, sonst wird die kuratierte Liste genu
 # Pfad bleibt gleich, nur die Club-ID aendert sich pro Platz.
 # date-Parameter ist DAY|YYYY-MM-DD, der Pipe ist URL-codiert als %7C.
 PCCADDIE_URL = ("https://mobile.pccaddie.net/clubs/pcco/app.php"
-                "?club={club}&cat=tt_timetable_course&date=DAY%7C{date}")
+                "?club={club}&cat={cat}&date=DAY%7C{date}")
 
 # Browser-aehnlicher User-Agent, damit der Abruf nicht sofort geblockt wird.
 DEFAULT_HEADERS = {
@@ -111,6 +111,10 @@ class Course:
     # Alternativer Bereichsschluessel mancher Anlagen (z.B. Sempachersee):
     # wird als &als_id=<zahl> an die Timetable-URL gehaengt.
     als_id: str = ""
+    # Timetable-Kategorie. Standard ist die normale Liste; manche Anlagen
+    # (mehrere Plaetze) liefern ihre Zeiten nur ueber die Spalten-Uebersicht
+    # "tt_timetable_course_alias".
+    cat: str = "tt_timetable_course"
 
 
 # Verifizierte Koordinaten (Google Places) und PC-Caddie-Club-IDs.
@@ -373,7 +377,9 @@ def build_url(course: Course, date: dt.date) -> Optional[str]:
     """Baut die Timetable-URL aus Club-ID oder expliziter URL."""
     url = None
     if course.pccaddie_club_id is not None:
-        url = PCCADDIE_URL.format(club=course.pccaddie_club_id, date=date.isoformat())
+        url = PCCADDIE_URL.format(club=course.pccaddie_club_id,
+                                  cat=course.cat or "tt_timetable_course",
+                                  date=date.isoformat())
     elif course.timetable_url:
         url = course.timetable_url.format(date=date.isoformat())
     if url and course.alias:
@@ -381,6 +387,13 @@ def build_url(course: Course, date: dt.date) -> Optional[str]:
     elif url and course.als_id:
         url += f"&als_id={course.als_id}"
     return url
+
+
+# Anlagen, deren Zeiten nur ueber die Spalten-Uebersicht kommen (mehrere
+# Plaetze auf einer Seite) statt ueber die normale Startzeitenliste.
+CLUB_CAT: dict[int, str] = {
+    171: "tt_timetable_course_alias",  # Golf Sempachersee
+}
 
 
 # Anlagen (Bereiche) innerhalb eines Clubs, die PC Caddie ueber das Feld
@@ -393,11 +406,7 @@ CLUB_AREAS: dict[int, list[dict]] = {
         {"label": "Holzhäusern, 9-Loch Rigi", "alias": "H9LN", "holes": 9},
         {"label": "Holzhäusern, 9-Loch Par 3 Pilatus", "alias": "H6L", "holes": 9},
     ],
-    171: [  # Golf Sempachersee (Bereichswahl ueber als_id)
-        {"label": "Sempachersee, 18-Loch Lakeside", "als_id": "3282", "holes": 18},
-        {"label": "Sempachersee, 18-Loch Woodside", "als_id": "3281", "holes": 18},
-    ],
-    205: [  # Anlagenname kommt aus der Erkennung; nur Suffix anhaengen
+    205: [  # Golfpark Lipperswil (Bereichswahl ueber alias)
         {"suffix": "18-Loch", "alias": "18L", "holes": 18},
         {"suffix": "9-Loch", "alias": "0901", "holes": 9},
     ],

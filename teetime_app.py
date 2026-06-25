@@ -64,6 +64,7 @@ def load_courses() -> list[dict]:
 
     out = []
     for c in courses:
+        cat = tw.CLUB_CAT.get(c.pccaddie_club_id, "tt_timetable_course")
         areas = tw.CLUB_AREAS.get(c.pccaddie_club_id)
         if areas:
             # Anlage mit mehreren Bereichen -> je Bereich ein eigener Eintrag.
@@ -73,11 +74,12 @@ def load_courses() -> list[dict]:
                             "drive": c.drive_min_est,
                             "alias": a.get("alias", ""),
                             "als_id": a.get("als_id", ""),
+                            "cat": cat,
                             "area_holes": a.get("holes")})
         else:
             out.append({"name": c.name, "club_id": c.pccaddie_club_id,
                         "drive": c.drive_min_est, "alias": "", "als_id": "",
-                        "area_holes": None})
+                        "cat": cat, "area_holes": None})
     return out
 
 
@@ -100,9 +102,10 @@ def load_migros() -> dict | None:
 
 @st.cache_data(show_spinner=False, ttl=90)
 def fetch_slots(club_id: int, name: str, date: dt.date, alias: str = "",
-                als_id: str = ""):
+                als_id: str = "", cat: str = "tt_timetable_course"):
     course = tw.Course(name=name, lat=0.0, lon=0.0, pccaddie_club_id=club_id,
-                       alias=alias or "", als_id=als_id or "")
+                       alias=alias or "", als_id=als_id or "",
+                       cat=cat or "tt_timetable_course")
     raw = tw.fetch_timetable_raw(course, date)
     if not raw:
         return []
@@ -390,7 +393,8 @@ if st.session_state.get("searched"):
         done = 0
         with cf.ThreadPoolExecutor(max_workers=8) as ex:
             futures = {ex.submit(fetch_slots, c["club_id"], c["name"], date,
-                                 c.get("alias", ""), c.get("als_id", "")): c
+                                 c.get("alias", ""), c.get("als_id", ""),
+                                 c.get("cat", "tt_timetable_course")): c
                        for c in to_fetch}
             for fut in cf.as_completed(futures):
                 c = futures[fut]
