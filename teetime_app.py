@@ -406,12 +406,21 @@ if st.session_state.get("searched"):
     for course in to_fetch:
         mins = course["drive"]
         area_holes = course.get("area_holes")
+        info = course.get("migros") or {}
+        fac = info.get("holes")
+        fac_holes = int(fac) if isinstance(fac, str) and fac.isdigit() else (
+            fac if isinstance(fac, int) else None)
+
+        # Wirksame Lochzahl je Startzeit: pro Zeit gelesen, sonst Bereich,
+        # sonst Anlagen-Lochzahl. Dient dem 9-Loch-Filter.
+        def eff_holes(s):
+            return s.get("holes") or area_holes or fac_holes
+
         slots = slots_by_name.get(course["name"], [])
         hits = [s for s in slots
                 if slot_possible(s, t_from, t_to, flight, only_available)
-                and (include_9 or (s.get("holes") or area_holes) != 9)]
+                and (include_9 or eff_holes(s) != 9)]
 
-        info = course.get("migros") or {}
         drive_txt = f"ca. {mins}" if mins is not None else "?"
         if not hits:
             checked.append({"Platz": course["name"],
