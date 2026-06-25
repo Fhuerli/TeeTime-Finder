@@ -105,6 +105,12 @@ class Course:
     # Kuratierte Fahrzeit in Min (Fallback, wenn kein Maps-Key gesetzt ist).
     drive_min_est: Optional[int] = None
     enabled: bool = True
+    # Optionaler Bereich (Anlage) innerhalb eines Clubs, z.B. "H18N" fuer den
+    # 18-Loch-Platz. Wird als &alias=ALIAS|<code> an die Timetable-URL gehaengt.
+    alias: str = ""
+    # Alternativer Bereichsschluessel mancher Anlagen (z.B. Sempachersee):
+    # wird als &als_id=<zahl> an die Timetable-URL gehaengt.
+    als_id: str = ""
 
 
 # Verifizierte Koordinaten (Google Places) und PC-Caddie-Club-IDs.
@@ -331,7 +337,7 @@ def _extract_holes(text: str) -> Optional[int]:
     """
     if not text:
         return None
-    m = re.search(r"\b(9|18)\s*[-\u2013 ]?\s*Loch", text, re.IGNORECASE)
+    m = re.search(r"\b(9|18)\s*[-\u2013 ]?\s*(?:Loch|Hole)", text, re.IGNORECASE)
     return int(m.group(1)) if m else None
 
 
@@ -365,11 +371,33 @@ def _strip_session_params(url: str) -> str:
 
 def build_url(course: Course, date: dt.date) -> Optional[str]:
     """Baut die Timetable-URL aus Club-ID oder expliziter URL."""
+    url = None
     if course.pccaddie_club_id is not None:
-        return PCCADDIE_URL.format(club=course.pccaddie_club_id, date=date.isoformat())
-    if course.timetable_url:
-        return course.timetable_url.format(date=date.isoformat())
-    return None
+        url = PCCADDIE_URL.format(club=course.pccaddie_club_id, date=date.isoformat())
+    elif course.timetable_url:
+        url = course.timetable_url.format(date=date.isoformat())
+    if url and course.alias:
+        url += f"&alias=ALIAS%7C{course.alias}"
+    elif url and course.als_id:
+        url += f"&als_id={course.als_id}"
+    return url
+
+
+# Anlagen (Bereiche) innerhalb eines Clubs, die PC Caddie ueber das Feld
+# "Bereich" getrennt fuehrt. Pro Eintrag ein Anzeigename, der Bereichsschluessel
+# (alias ODER als_id, je nach Anlage) und die Lochzahl. Damit erscheinen z.B.
+# die Plaetze von Holzhaeusern und Sempachersee einzeln zur Auswahl.
+CLUB_AREAS: dict[int, list[dict]] = {
+    174: [  # Golfpark Holzhaeusern (Bereichswahl ueber alias)
+        {"label": "Holzhäusern, 18-Loch Zugersee", "alias": "H18N", "holes": 18},
+        {"label": "Holzhäusern, 9-Loch Rigi", "alias": "H9LN", "holes": 9},
+        {"label": "Holzhäusern, 9-Loch Par 3 Pilatus", "alias": "H6L", "holes": 9},
+    ],
+    171: [  # Golf Sempachersee (Bereichswahl ueber als_id)
+        {"label": "Sempachersee, 18-Loch Lakeside", "als_id": "3282", "holes": 18},
+        {"label": "Sempachersee, 18-Loch Woodside", "als_id": "3281", "holes": 18},
+    ],
+}
 
 
 def discover_clubs(country: str = DISCOVER_COUNTRY) -> list[tuple[int, str]]:

@@ -61,10 +61,23 @@ def load_courses() -> list[dict]:
     courses = tw.courses_from_discovery("041")
     if not courses:
         courses = [c for c in tw.COURSES if c.pccaddie_club_id]
-    return [
-        {"name": c.name, "club_id": c.pccaddie_club_id, "drive": c.drive_min_est}
-        for c in courses
-    ]
+
+    out = []
+    for c in courses:
+        areas = tw.CLUB_AREAS.get(c.pccaddie_club_id)
+        if areas:
+            # Anlage mit mehreren Bereichen -> je Bereich ein eigener Eintrag.
+            for a in areas:
+                out.append({"name": a["label"], "club_id": c.pccaddie_club_id,
+                            "drive": c.drive_min_est,
+                            "alias": a.get("alias", ""),
+                            "als_id": a.get("als_id", ""),
+                            "area_holes": a.get("holes")})
+        else:
+            out.append({"name": c.name, "club_id": c.pccaddie_club_id,
+                        "drive": c.drive_min_est, "alias": "", "als_id": "",
+                        "area_holes": None})
+    return out
 
 
 def load_migros() -> dict | None:
@@ -85,8 +98,10 @@ def load_migros() -> dict | None:
 
 
 @st.cache_data(show_spinner=False, ttl=90)
-def fetch_slots(club_id: int, name: str, date: dt.date):
-    course = tw.Course(name=name, lat=0.0, lon=0.0, pccaddie_club_id=club_id)
+def fetch_slots(club_id: int, name: str, date: dt.date, alias: str = "",
+                als_id: str = ""):
+    course = tw.Course(name=name, lat=0.0, lon=0.0, pccaddie_club_id=club_id,
+                       alias=alias or "", als_id=als_id or "")
     raw = tw.fetch_timetable_raw(course, date)
     if not raw:
         return []
@@ -271,6 +286,12 @@ only_available = st.checkbox(
          "gesperrt).",
 )
 
+include_9 = st.checkbox(
+    "9-Loch-Zeiten einschliessen", value=True,
+    help="Eingeschaltet zeigt auch 9-Loch-Startzeiten. Ausschalten blendet "
+         "Zeiten aus, die in PC Caddie als 9-Loch gekennzeichnet sind.",
+)
+
 # Alle Plätze mit Migros-Info anreichern und auf Migros-spielbare filtern.
 enriched = []
 for c in all_courses:
@@ -367,7 +388,8 @@ if st.session_state.get("searched"):
         progress = st.progress(0.0, text="Suche läuft ...")
         done = 0
         with cf.ThreadPoolExecutor(max_workers=8) as ex:
-            futures = {ex.submit(fetch_slots, c["club_id"], c["name"], date): c
+            futures = {ex.submit(fetch_slots, c["club_id"], c["name"], date,
+                                 c.get("alias", ""), c.get("als_id", "")): c
                        for c in to_fetch}
             for fut in cf.as_completed(futures):
                 c = futures[fut]
@@ -383,9 +405,11 @@ if st.session_state.get("searched"):
     # Treffer auswerten (schnell, ohne Netzwerk).
     for course in to_fetch:
         mins = course["drive"]
+        area_holes = course.get("area_holes")
         slots = slots_by_name.get(course["name"], [])
         hits = [s for s in slots
-                if slot_possible(s, t_from, t_to, flight, only_available)]
+                if slot_possible(s, t_from, t_to, flight, only_available)
+                and (include_9 or (s.get("holes") or area_holes) != 9)]
 
         info = course.get("migros") or {}
         drive_txt = f"ca. {mins}" if mins is not None else "?"
@@ -395,18 +419,22 @@ if st.session_state.get("searched"):
             continue
 
         hits_sorted = sorted(hits, key=lambda s: s["time"])
-        # Lochzahl: bevorzugt die aus PC Caddie gelesene Angabe pro Startzeit.
-        # Einheitlich -> in der Kopfzeile; gemischt -> pro Zeit; sonst Anlage.
-        slot_h = {s.get("holes") for s in hits_sorted if s.get("holes")}
-        if len(slot_h) == 1:
-            holes_val = str(next(iter(slot_h)))
+        # Lochzahl: bei definiertem Bereich dessen Lochzahl; sonst die pro
+        # Startzeit gelesene; sonst die Anlagen-Lochzahl aus der Migros-Liste.
+        if area_holes:
+            holes_val = str(area_holes)
             mixed_holes = False
-        elif len(slot_h) > 1:
-            holes_val = ""
-            mixed_holes = True
         else:
-            holes_val = info.get("holes", "") or ""
-            mixed_holes = False
+            slot_h = {s.get("holes") for s in hits_sorted if s.get("holes")}
+            if len(slot_h) == 1:
+                holes_val = str(next(iter(slot_h)))
+                mixed_holes = False
+            elif len(slot_h) > 1:
+                holes_val = ""
+                mixed_holes = True
+            else:
+                holes_val = info.get("holes", "") or ""
+                mixed_holes = False
         results.append({
             "name": course["name"],
             "drive": mins,
