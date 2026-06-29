@@ -32,6 +32,7 @@ from __future__ import annotations
 import concurrent.futures as cf
 import datetime as dt
 import html as html_lib
+import json
 import os
 
 import pandas as pd
@@ -42,6 +43,7 @@ import migros
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 MIGROS_JSON = os.path.join(HERE, "migros_data.json")
+DISCOVERY_JSON = os.path.join(HERE, "discovery_cache.json")
 
 
 # ---------------------------------------------------------------------------
@@ -56,10 +58,41 @@ def date_de(d: dt.date) -> str:
     return f"{WEEKDAYS_DE[d.weekday()]}, {d.strftime('%d.%m.%Y')}"
 
 
+def load_club_pairs() -> list[tuple[int, str]]:
+    """Holt die Club-Liste (id, name) vom PC-Caddie, mit Platten-Cache.
+
+    Bei Netzzugriff wird die frische Liste geholt und als JSON gespeichert.
+    Schlaegt der Abruf fehl (z.B. nach einem Cloud-Neustart, wenn der
+    In-Memory-Cache leer ist), wird die zuletzt gespeicherte Liste genutzt -
+    so startet die App auch ohne Netz schnell und vollstaendig.
+    """
+    clubs = tw.discover_clubs("041")
+    if clubs:
+        try:
+            with open(DISCOVERY_JSON, "w", encoding="utf-8") as f:
+                json.dump({"saved": dt.date.today().isoformat(),
+                           "clubs": [[cid, name] for cid, name in clubs]},
+                          f, ensure_ascii=False)
+        except Exception:  # noqa: BLE001
+            pass
+        return clubs
+    # Netzwerk leer -> letzten Platten-Cache verwenden.
+    if os.path.exists(DISCOVERY_JSON):
+        try:
+            with open(DISCOVERY_JSON, encoding="utf-8") as f:
+                data = json.load(f)
+            return [(int(c[0]), c[1]) for c in data.get("clubs", [])]
+        except Exception:  # noqa: BLE001
+            pass
+    return []
+
+
 @st.cache_data(show_spinner="Lade Schweizer Plätze ...", ttl=86400)
 def load_courses() -> list[dict]:
-    courses = tw.courses_from_discovery("041")
-    if not courses:
+    pairs = load_club_pairs()
+    if pairs:
+        courses = tw.courses_from_pairs(pairs)
+    else:
         courses = [c for c in tw.COURSES if c.pccaddie_club_id]
 
     out = []
@@ -123,8 +156,11 @@ def fetch_slots(club_id: int, name: str, date: dt.date, alias: str = "",
                        alias=alias or "", als_id=als_id or "",
                        cat=cat or "tt_timetable_course")
     raw = tw.fetch_timetable_raw(course, date)
-    if not raw:
-        return []
+    if raw is None:
+        # Abruf fehlgeschlagen (Netzwerk/HTTP). Bewusst eine Ausnahme statt
+        # einer leeren Liste: so wird der Fehler nicht mit "keine freie Zeit"
+        # verwechselt und (anders als ein Ergebnis) nicht 240 s gecacht.
+        raise RuntimeError(f"Abruf fehlgeschlagen: {name}")
     return [
         {
             "time": s.time.strftime("%H:%M"),
@@ -410,6 +446,7 @@ if st.session_state.get("searched"):
     # Startzeiten parallel abrufen (mehrere Plaetze gleichzeitig) statt
     # nacheinander. Das verkuerzt die Wartezeit deutlich.
     slots_by_name: dict[str, list] = {}
+    failed: set[str] = set()
     if to_fetch:
         progress = st.progress(0.0, text="Suche läuft ...")
         done = 0
@@ -424,6 +461,7 @@ if st.session_state.get("searched"):
                     slots_by_name[c["name"]] = fut.result()
                 except Exception:  # noqa: BLE001
                     slots_by_name[c["name"]] = []
+                    failed.add(c["name"])  # Abruf fehlgeschlagen, nicht "leer"
                 done += 1
                 progress.progress(done / len(to_fetch),
                                   text=f"{done}/{len(to_fetch)} Plätze geprüft ...")
@@ -443,12 +481,17 @@ if st.session_state.get("searched"):
         def eff_holes(s):
             return s.get("holes") or area_holes or fac_holes
 
+        drive_txt = f"ca. {mins}" if mins is not None else "?"
+        if course["name"] in failed:
+            checked.append({"Platz": course["name"],
+                            "Status": f"nicht erreichbar ({drive_txt} Min.)"})
+            continue
+
         slots = slots_by_name.get(course["name"], [])
         hits = [s for s in slots
                 if slot_possible(s, t_from, t_to, flight, only_available)
                 and (include_9 or eff_holes(s) != 9)]
 
-        drive_txt = f"ca. {mins}" if mins is not None else "?"
         if not hits:
             checked.append({"Platz": course["name"],
                             "Status": f"keine freie Zeit ({drive_txt} Min.)"})
@@ -508,6 +551,12 @@ if st.session_state.get("searched"):
                                 else 9999, r["name"]))
 
     st.subheader(f"Buchbare Startzeiten am {date_de(date)}")
+
+    if failed:
+        st.warning(
+            f"{len(failed)} Platz/Plätze konnten nicht geprüft werden "
+            f"(Netzwerk). Dort könnten Zeiten frei sein – bitte erneut "
+            f"suchen. Betroffen: {', '.join(sorted(failed))}.")
 
     if results:
         total = sum(len(r["slots"]) for r in results)

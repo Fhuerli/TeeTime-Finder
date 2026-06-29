@@ -94,9 +94,24 @@ DEFAULT_HEADERS = {
 # der erneute TCP-/TLS-Handshake -> spuerbar schneller, wenn viele Plaetze
 # parallel geprueft werden. pool_maxsize deckt die parallelen Worker ab.
 # requests.Session ist fuer parallele GETs aus mehreren Threads geeignet.
+#
+# Retry-Strategie: kurzlebige Aussetzer (Verbindungsabbruch, 429/5xx) werden
+# automatisch bis zu 2x mit Backoff wiederholt. Das verhindert, dass ein Platz
+# wegen eines einmaligen Netz-Hicks faelschlich "keine Zeit" liefert -
+# besonders relevant im Cloud-Betrieb.
+try:
+    from urllib3.util.retry import Retry
+    _retry = Retry(total=2, connect=2, read=2, backoff_factor=0.5,
+                   status_forcelist=(429, 500, 502, 503, 504),
+                   raise_on_status=False)
+except Exception:  # noqa: BLE001
+    _retry = None
+
 _SESSION = requests.Session()
 _SESSION.headers.update(DEFAULT_HEADERS)
-_adapter = requests.adapters.HTTPAdapter(pool_connections=8, pool_maxsize=24)
+_adapter = requests.adapters.HTTPAdapter(
+    pool_connections=8, pool_maxsize=24,
+    max_retries=_retry if _retry is not None else 0)
 _SESSION.mount("https://", _adapter)
 _SESSION.mount("http://", _adapter)
 
@@ -303,7 +318,15 @@ def courses_from_discovery(country: str = DISCOVER_COUNTRY) -> list["Course"]:
     Ohne Netzzugriff liefert discover_clubs eine leere Liste; der Aufrufer
     sollte dann auf die kuratierte COURSES-Liste zurueckfallen.
     """
-    clubs = discover_clubs(country)
+    return courses_from_pairs(discover_clubs(country))
+
+
+def courses_from_pairs(clubs: list[tuple[int, str]]) -> list["Course"]:
+    """Baut Course-Objekte aus (club_id, name)-Paaren (z.B. aus einem Cache).
+
+    Die Fahrzeit wird ueber den Platznamen geschaetzt (DRIVE_EST_BY_NAME),
+    sonst ueber die Club-ID-Tabelle; sonst bleibt sie unbekannt.
+    """
     out: list[Course] = []
     for cid, name in clubs:
         est = drive_estimate(name)

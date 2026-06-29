@@ -7,3 +7,6 @@ venv/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Laufzeit-Cache (wird beim Start neu erzeugt)
+discovery_cache.json
