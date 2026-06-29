@@ -100,7 +100,23 @@ def load_migros() -> dict | None:
     return None
 
 
-@st.cache_data(show_spinner=False, ttl=90)
+@st.cache_data(show_spinner=False)
+def enrich_courses(all_courses: list[dict], migros_clubs: dict) -> list[dict]:
+    """Reichert jeden Platz mit seinem Migros-Eintrag an.
+
+    Der Namensabgleich ist O(Plaetze x Clubs) und lief bisher bei jedem
+    Streamlit-Rerun (Schieber, Haekchen). Hier gecacht, damit er nur neu
+    berechnet wird, wenn sich Platzliste oder Migros-Daten aendern.
+    """
+    out = []
+    for c in all_courses:
+        info = migros.find_migros_course(c["name"], migros_clubs) \
+            if migros_clubs else None
+        out.append({**c, "migros": info})
+    return out
+
+
+@st.cache_data(show_spinner=False, ttl=240)
 def fetch_slots(club_id: int, name: str, date: dt.date, alias: str = "",
                 als_id: str = "", cat: str = "tt_timetable_course"):
     course = tw.Course(name=name, lat=0.0, lon=0.0, pccaddie_club_id=club_id,
@@ -302,11 +318,9 @@ include_9 = st.checkbox(
 )
 
 # Alle Plätze mit Migros-Info anreichern und auf Migros-spielbare filtern.
-enriched = []
-for c in all_courses:
-    info = migros.find_migros_course(c["name"], migros_clubs) \
-        if migros_clubs else None
-    enriched.append({**c, "migros": info})
+# Gecacht: der Abgleich läuft nur bei geänderter Platz-/Migros-Liste, nicht
+# bei jedem Rerun (Schieber, Häkchen).
+enriched = enrich_courses(all_courses, migros_clubs)
 
 
 def playable_migros(course: dict) -> bool:
@@ -399,7 +413,7 @@ if st.session_state.get("searched"):
     if to_fetch:
         progress = st.progress(0.0, text="Suche läuft ...")
         done = 0
-        with cf.ThreadPoolExecutor(max_workers=8) as ex:
+        with cf.ThreadPoolExecutor(max_workers=16) as ex:
             futures = {ex.submit(fetch_slots, c["club_id"], c["name"], date,
                                  c.get("alias", ""), c.get("als_id", ""),
                                  c.get("cat", "tt_timetable_course")): c

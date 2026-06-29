@@ -89,6 +89,34 @@ DEFAULT_HEADERS = {
 }
 
 
+# Gemeinsame HTTP-Session: alle Abrufe gehen auf denselben Host
+# (mobile.pccaddie.net). Mit Keep-Alive und Connection-Pool entfaellt pro Platz
+# der erneute TCP-/TLS-Handshake -> spuerbar schneller, wenn viele Plaetze
+# parallel geprueft werden. pool_maxsize deckt die parallelen Worker ab.
+# requests.Session ist fuer parallele GETs aus mehreren Threads geeignet.
+_SESSION = requests.Session()
+_SESSION.headers.update(DEFAULT_HEADERS)
+_adapter = requests.adapters.HTTPAdapter(pool_connections=8, pool_maxsize=24)
+_SESSION.mount("https://", _adapter)
+_SESSION.mount("http://", _adapter)
+
+
+# HTML-Parser fuer BeautifulSoup. lxml ist deutlich schneller als der
+# eingebaute html.parser; faellt automatisch zurueck, falls lxml fehlt.
+_BS_PARSER: Optional[str] = None
+
+
+def _bs_parser() -> str:
+    global _BS_PARSER
+    if _BS_PARSER is None:
+        try:
+            import lxml  # noqa: F401
+            _BS_PARSER = "lxml"
+        except Exception:  # noqa: BLE001
+            _BS_PARSER = "html.parser"
+    return _BS_PARSER
+
+
 @dataclass
 class Course:
     name: str
@@ -309,7 +337,7 @@ def within_drive_time(course: Course) -> bool:
     if not GOOGLE_MAPS_API_KEY:
         return (course.drive_min_est or 0) <= MAX_DRIVE_MIN
     try:
-        resp = requests.get(
+        resp = _SESSION.get(
             "https://maps.googleapis.com/maps/api/distancematrix/json",
             params={
                 "origins": ORIGIN,
@@ -431,7 +459,7 @@ def discover_clubs(country: str = DISCOVER_COUNTRY) -> list[tuple[int, str]]:
     Name direkt aus den data-Attributen.
     """
     try:
-        resp = requests.get(CLUBSELECT_URL, headers=DEFAULT_HEADERS, timeout=20)
+        resp = _SESSION.get(CLUBSELECT_URL, timeout=20)
         resp.raise_for_status()
     except Exception as exc:  # noqa: BLE001
         print(f"[WARN] Anlagenauswahl nicht abrufbar: {exc}")
@@ -440,7 +468,7 @@ def discover_clubs(country: str = DISCOVER_COUNTRY) -> list[tuple[int, str]]:
     found: dict[int, str] = {}
     try:
         from bs4 import BeautifulSoup
-        soup = BeautifulSoup(resp.text, "html.parser")
+        soup = BeautifulSoup(resp.text, _bs_parser())
         for div in soup.select("div.pcco-club"):
             if div.get("data-country") != country:
                 continue
@@ -465,9 +493,11 @@ def fetch_timetable_raw(course: Course, date: dt.date) -> Optional[str]:
     if not url:
         print(f"[SKIP] {course.name}: keine Club-ID/URL hinterlegt.")
         return None
-    headers = {**DEFAULT_HEADERS, **(course.headers or {})}
+    headers = course.headers or None
     try:
-        resp = requests.get(url, headers=headers, timeout=10)
+        # Getrennter Connect-/Read-Timeout: bei einem nicht erreichbaren Platz
+        # blockiert die Suche so hoechstens kurz (Connect), statt 10 s zu warten.
+        resp = _SESSION.get(url, headers=headers, timeout=(4, 10))
         resp.raise_for_status()
         return resp.text
     except Exception as exc:  # noqa: BLE001
@@ -491,7 +521,7 @@ def parse_slots(course: Course, date: dt.date, raw: str) -> list[Slot]:
     """
     from bs4 import BeautifulSoup
 
-    soup = BeautifulSoup(raw, "html.parser")
+    soup = BeautifulSoup(raw, _bs_parser())
     slots: list[Slot] = []
 
     # Normale Startzeitenliste: Zeilen mit der bekannten Klasse. Manche Anlagen
