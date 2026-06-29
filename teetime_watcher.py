@@ -445,6 +445,7 @@ def build_url(course: Course, date: dt.date) -> Optional[str]:
 # nicht existiert). parse_slots liest beide Seitenarten.
 CLUB_CAT: dict[int, str] = {
     171: "tt_timetable_course_alias",  # Golf Sempachersee
+    218: "tt_timetable_course_alias",  # Golf Kyburg (Standard-Seite liefert 404)
 }
 
 # Anlagen, deren Zeiten sich nicht maschinell auslesen lassen -> Direktlink.

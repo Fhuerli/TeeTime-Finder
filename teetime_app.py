@@ -459,6 +459,7 @@ if st.session_state.get("searched"):
         st.stop()
 
     results: list[dict] = []
+    login_results: list[dict] = []  # Login-pflichtige Clubs, separat ausgewiesen
     checked: list[dict] = []
 
     # Plaetze innerhalb der Fahrzeit bestimmen; zu weite gleich vermerken.
@@ -576,15 +577,18 @@ if st.session_state.get("searched"):
                                  "Startzeiten bei PC Caddie öffnen"))
 
     # Login-pflichtige Plaetze (401/403): eingeloggt im eigenen Browser buchbar.
-    # Wir bieten denselben Direktlink mit passendem Hinweis an.
+    # Bewusst NICHT in die gruenen Treffer, weil die App ihre Verfuegbarkeit
+    # nicht lesen kann. Sie kommen in einen eigenen Abschnitt mit Direktlink.
     for course in to_fetch:
         if course["name"] in login:
-            results.append(link_card(course, date,
-                                     "Login nötig – bei PC Caddie öffnen"))
+            login_results.append(link_card(course, date,
+                                           "Login nötig – bei PC Caddie öffnen"))
 
     # Nach Fahrzeit gruppiert sortieren (Plätze ohne Schätzung ans Ende).
-    results.sort(key=lambda r: (r["drive"] if isinstance(r["drive"], int)
-                                else 9999, r["name"]))
+    sort_key = lambda r: (r["drive"] if isinstance(r["drive"], int)
+                          else 9999, r["name"])
+    results.sort(key=sort_key)
+    login_results.sort(key=sort_key)
 
     st.subheader(f"Buchbare Startzeiten am {date_de(date)}")
 
@@ -602,6 +606,15 @@ if st.session_state.get("searched"):
                    "Greenfee-Angaben aus der Migros-Tarifliste, ohne Gewähr.")
     else:
         st.info("Keine buchbaren Startzeiten im gewählten Rahmen gefunden.")
+
+    # Login-pflichtige Clubs getrennt ausweisen: hier KEINE Verfuegbarkeit
+    # geprueft, daher kein "frei"-Versprechen, nur der Direktlink.
+    if login_results:
+        st.markdown("**Nur mit Login buchbar** – Verfügbarkeit kann hier nicht "
+                    "geprüft werden:")
+        st.markdown(build_results_html(login_results), unsafe_allow_html=True)
+        st.caption("Diese Clubs zeigen Startzeiten nur eingeloggt. Zum "
+                   "Öffnen/Buchen antippen (Login bei PC Caddie nötig).")
 
     with st.expander("Geprüft, aber nicht angezeigt"):
         if checked:
