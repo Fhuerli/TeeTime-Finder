@@ -507,25 +507,56 @@ def discover_clubs(country: str = DISCOVER_COUNTRY) -> list[tuple[int, str]]:
     return sorted(found.items(), key=lambda kv: kv[1].lower())
 
 
-def fetch_timetable_raw(course: Course, date: dt.date) -> Optional[str]:
-    """Holt die Roh-Antwort des Timetables fuer ein Datum.
+# HTTP-Status mit fester Bedeutung fuer den Timetable-Abruf:
+#   401/403 -> Login-Wand: der Club zeigt Startzeiten nur eingeloggten Nutzern.
+#              Eingeloggt im eigenen Browser buchbar -> wir bieten Direktlink.
+#   404/410 -> es gibt keine oeffentliche Startzeiten-Seite (reiner
+#              Mitglieder-Club ohne Online-Buchung, oder gar kein Platz).
+LOGIN_STATUS = {401, 403}
+GONE_STATUS = {404, 410}
 
-    Liefert i.d.R. ein HTML-Fragment der mobilen Ansicht zurueck.
+
+def fetch_timetable(course: Course, date: dt.date) -> tuple[str, Optional[str]]:
+    """Holt den Timetable und unterscheidet die Ergebnisarten.
+
+    Rueckgabe (status, text):
+        "ok"          -> text = HTML-Fragment der Startzeiten
+        "login"       -> Login noetig (401/403); eingeloggt ueber Direktlink buchbar
+        "unavailable" -> keine oeffentliche Startzeiten-Seite (404/410)
+        "error"       -> voruebergehender Fehler (Timeout/Verbindung/5xx/429),
+                         erneutes Suchen kann helfen
     """
     url = build_url(course, date)
     if not url:
         print(f"[SKIP] {course.name}: keine Club-ID/URL hinterlegt.")
-        return None
+        return ("unavailable", None)
     headers = course.headers or None
     try:
         # Getrennter Connect-/Read-Timeout: bei einem nicht erreichbaren Platz
         # blockiert die Suche so hoechstens kurz (Connect), statt 10 s zu warten.
         resp = _SESSION.get(url, headers=headers, timeout=(4, 10))
-        resp.raise_for_status()
-        return resp.text
     except Exception as exc:  # noqa: BLE001
         print(f"[WARN] Abruf {course.name} fehlgeschlagen: {exc}")
-        return None
+        return ("error", None)
+    if resp.status_code in LOGIN_STATUS:
+        return ("login", None)
+    if resp.status_code in GONE_STATUS:
+        return ("unavailable", None)
+    if resp.status_code >= 400:
+        # 5xx und sonstige 4xx (z.B. 429) -> voruebergehend, erneut versuchen.
+        print(f"[WARN] Abruf {course.name}: HTTP {resp.status_code}")
+        return ("error", None)
+    return ("ok", resp.text)
+
+
+def fetch_timetable_raw(course: Course, date: dt.date) -> Optional[str]:
+    """Kompatibilitaets-Wrapper: liefert nur das HTML oder None (fuer main()).
+
+    Unterscheidet bewusst nicht zwischen "unavailable" und "error"; die App
+    nutzt dafuer fetch_timetable().
+    """
+    _status, text = fetch_timetable(course, date)
+    return text
 
 
 def parse_slots(course: Course, date: dt.date, raw: str) -> list[Slot]:

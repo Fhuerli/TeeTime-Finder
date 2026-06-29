@@ -155,23 +155,30 @@ def fetch_slots(club_id: int, name: str, date: dt.date, alias: str = "",
     course = tw.Course(name=name, lat=0.0, lon=0.0, pccaddie_club_id=club_id,
                        alias=alias or "", als_id=als_id or "",
                        cat=cat or "tt_timetable_course")
-    raw = tw.fetch_timetable_raw(course, date)
-    if raw is None:
-        # Abruf fehlgeschlagen (Netzwerk/HTTP). Bewusst eine Ausnahme statt
-        # einer leeren Liste: so wird der Fehler nicht mit "keine freie Zeit"
-        # verwechselt und (anders als ein Ergebnis) nicht 240 s gecacht.
+    status, raw = tw.fetch_timetable(course, date)
+    if status == "error":
+        # Voruebergehender Fehler (Timeout/Verbindung/5xx). Bewusst eine
+        # Ausnahme: wird nicht mit "keine freie Zeit" verwechselt und (anders
+        # als ein Ergebnis) nicht 240 s gecacht -> naechste Suche versucht neu.
         raise RuntimeError(f"Abruf fehlgeschlagen: {name}")
-    return [
-        {
-            "time": s.time.strftime("%H:%M"),
-            "free": s.free_spots,
-            "member_reserved": s.member_reserved,
-            "guest_min_hcp": s.guest_min_hcp,
-            "link": s.booking_link,
-            "holes": s.holes,
-        }
-        for s in tw.parse_slots(course, date, raw)
-    ]
+    if status in ("unavailable", "login"):
+        # Dauerhafter Zustand (404 = keine Seite, login = Login-Wand). Gecacht,
+        # damit nicht jede Suche denselben 404/401 erneut abruft.
+        return {"status": status, "slots": []}
+    return {
+        "status": "ok",
+        "slots": [
+            {
+                "time": s.time.strftime("%H:%M"),
+                "free": s.free_spots,
+                "member_reserved": s.member_reserved,
+                "guest_min_hcp": s.guest_min_hcp,
+                "link": s.booking_link,
+                "holes": s.holes,
+            }
+            for s in tw.parse_slots(course, date, raw)
+        ],
+    }
 
 
 def slot_possible(slot: dict, t_from: dt.time, t_to: dt.time,
@@ -195,6 +202,30 @@ def condition_text(info: dict | None) -> str:
     if info.get("varies"):
         parts.append("Preise tagesabhängig")
     return "; ".join(parts)
+
+
+def link_card(course: dict, date: dt.date, label: str) -> dict:
+    """Baut eine Ergebnis-Karte mit einem einzelnen Direktlink-Knopf.
+
+    Genutzt fuer Plaetze, deren Zeiten sich nicht maschinell lesen lassen
+    (Direktlink) oder die einen Login erfordern: der Knopf fuehrt auf die
+    PC-Caddie-Tagesuebersicht, wo (ggf. nach Login) gebucht werden kann.
+    """
+    info = course.get("migros") or {}
+    link = tw.build_url(tw.Course(
+        name=course["name"], lat=0.0, lon=0.0,
+        pccaddie_club_id=course["club_id"],
+        cat=course.get("cat", "tt_timetable_course")), date) or ""
+    return {
+        "name": course["name"],
+        "drive": course["drive"],
+        "holes": info.get("holes", "") or "",
+        "mixed_holes": False,
+        "mofr": info.get("mofr18", "") or "",
+        "saso": info.get("saso18", "") or "",
+        "cond": condition_text(info),
+        "slots": [{"time": "", "free": 0, "link": link, "label": label}],
+    }
 
 
 def build_results_html(results: list[dict]) -> str:
@@ -446,7 +477,9 @@ if st.session_state.get("searched"):
     # Startzeiten parallel abrufen (mehrere Plaetze gleichzeitig) statt
     # nacheinander. Das verkuerzt die Wartezeit deutlich.
     slots_by_name: dict[str, list] = {}
-    failed: set[str] = set()
+    failed: set[str] = set()        # voruebergehender Fehler -> erneut versuchen
+    unavailable: set[str] = set()   # dauerhaft keine oeffentliche Seite (404)
+    login: set[str] = set()         # Login-Wand -> als Direktlink anbieten
     if to_fetch:
         progress = st.progress(0.0, text="Suche läuft ...")
         done = 0
@@ -458,7 +491,12 @@ if st.session_state.get("searched"):
             for fut in cf.as_completed(futures):
                 c = futures[fut]
                 try:
-                    slots_by_name[c["name"]] = fut.result()
+                    res = fut.result()
+                    slots_by_name[c["name"]] = res["slots"]
+                    if res["status"] == "unavailable":
+                        unavailable.add(c["name"])
+                    elif res["status"] == "login":
+                        login.add(c["name"])
                 except Exception:  # noqa: BLE001
                     slots_by_name[c["name"]] = []
                     failed.add(c["name"])  # Abruf fehlgeschlagen, nicht "leer"
@@ -485,6 +523,12 @@ if st.session_state.get("searched"):
         if course["name"] in failed:
             checked.append({"Platz": course["name"],
                             "Status": f"nicht erreichbar ({drive_txt} Min.)"})
+            continue
+        if course["name"] in login:
+            continue  # wird unten als Direktlink-Karte ausgegeben
+        if course["name"] in unavailable:
+            checked.append({"Platz": course["name"],
+                            "Status": "online nicht buchbar (Mitglieder/Direktbuchung)"})
             continue
 
         slots = slots_by_name.get(course["name"], [])
@@ -525,26 +569,18 @@ if st.session_state.get("searched"):
             "slots": hits_sorted,
         })
 
-    # Direktlink-Plaetze (Zeiten nicht maschinell lesbar): eine Karte mit einem
-    # Knopf auf die PC-Caddie-Uebersicht des gewaehlten Tages.
+    # Direktlink-Plaetze (Zeiten nicht maschinell lesbar): Karte mit einem Knopf
+    # auf die PC-Caddie-Uebersicht des gewaehlten Tages.
     for course in link_only:
-        mins = course["drive"]
-        info = course.get("migros") or {}
-        link = tw.build_url(tw.Course(
-            name=course["name"], lat=0.0, lon=0.0,
-            pccaddie_club_id=course["club_id"],
-            cat=course.get("cat", "tt_timetable_course")), date) or ""
-        results.append({
-            "name": course["name"],
-            "drive": mins,
-            "holes": info.get("holes", "") or "",
-            "mixed_holes": False,
-            "mofr": info.get("mofr18", "") or "",
-            "saso": info.get("saso18", "") or "",
-            "cond": condition_text(info),
-            "slots": [{"time": "", "free": 0, "link": link,
-                       "label": "Startzeiten bei PC Caddie öffnen"}],
-        })
+        results.append(link_card(course, date,
+                                 "Startzeiten bei PC Caddie öffnen"))
+
+    # Login-pflichtige Plaetze (401/403): eingeloggt im eigenen Browser buchbar.
+    # Wir bieten denselben Direktlink mit passendem Hinweis an.
+    for course in to_fetch:
+        if course["name"] in login:
+            results.append(link_card(course, date,
+                                     "Login nötig – bei PC Caddie öffnen"))
 
     # Nach Fahrzeit gruppiert sortieren (Plätze ohne Schätzung ans Ende).
     results.sort(key=lambda r: (r["drive"] if isinstance(r["drive"], int)
